@@ -574,10 +574,10 @@ bool SteamTransport::join(std::uint64_t id, std::uint32_t direct_ip, std::uint16
     if (!open())
         return false;
     auto &p = *impl_;
-    if (id == p.state.local_id) {
-        p.state.detail = "Use Local Echo to test on one machine, or join from another Steam account.";
-        return false;
-    }
+    // if (id == p.state.local_id) {
+    //     p.state.detail = "Use Local Echo to test on one machine, or join from another Steam account.";
+    //     return false;
+    // }
     p.host_id = id;
     p.allowed.insert(id);
     p.capacity = max_players;
@@ -646,7 +646,7 @@ bool SteamTransport::listen_direct(std::uint16_t port) {
 }
 bool SteamTransport::connect_peer(std::uint64_t id) {
     auto &p = *impl_;
-    if (!p.state.ready || p.state.hosting || !p.allowed.contains(id) || id == p.state.local_id)
+    if (!p.state.ready || p.state.hosting || !p.allowed.contains(id))
         return false;
     if (p.links.contains(id))
         return true;
@@ -723,7 +723,7 @@ void SteamTransport::poll() {
             }
         }
         // (A connection by address names a Steam ID only when Steam has vouched for it.)
-        if ((event.m_info.m_hListenSocket != p.listener && !direct) || !p.listener || !id || id == p.state.local_id ||
+        if ((event.m_info.m_hListenSocket != p.listener && !direct) || !p.listener || !id ||
             (!p.state.hosting && !p.allowed.contains(id)) || p.links.size() >= p.capacity - 1 ||
             existing != p.links.end() ||
             event.m_info.m_identityRemote.m_eType != k_ESteamNetworkingIdentityType_SteamID) {
