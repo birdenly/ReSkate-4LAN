@@ -249,9 +249,6 @@ void voice_controls(SkateMenu &menu, const MultiplayerModel &mp) {
 
     // Steam records the voice, so the input device is the one chosen in Steam;
     // its API cannot be pointed at another.
-    // field(menu, "Input device", "Voice is recorded by Steam, so it uses the microphone chosen in Steam's voice settings.");
-    // if (ImGui::Button("Choose in Steam voice settings", ImVec2(-FLT_MIN, 0)))
-    //     ShellExecuteW(nullptr, L"open", L"steam://settings/voice", nullptr, nullptr, SW_SHOWNORMAL);
     field(menu, "Your microphone", "How loud other players hear you.");
     changed |= ImGui::SliderFloat("##microphone", &value.microphone, 0.f, max_voice_volume, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
     if (mp.voice.transmitting) {
