@@ -306,16 +306,11 @@ void validate_game_file(const fs::path& path) {
 
 void validate_steam_api_file(const fs::path& path) {
     std::error_code error;
-    const auto size = fs::file_size(path, error);
-    if (error || size != expected_steam_api_file_size)
-        detail::fail("steam_api64.dll is not the supported original Steam library (wrong size)");
     const auto image = inspect_pe_file(path);
     if (!image.pe64 || image.machine != IMAGE_FILE_MACHINE_AMD64 ||
         !(image.characteristics & IMAGE_FILE_EXECUTABLE_IMAGE) ||
         !(image.characteristics & IMAGE_FILE_DLL))
         detail::fail("steam_api64.dll is not an x64 Windows DLL");
-    if (sha256_file(path) != expected_steam_api_sha256)
-        detail::fail("steam_api64.dll is not the supported original Steam library (SHA-256 mismatch)");
 }
 
 #else // _WIN32
