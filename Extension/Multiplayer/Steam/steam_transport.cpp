@@ -69,6 +69,36 @@ std::string bounded(const char *text, std::size_t size) {
         ++length;
     return std::string(text, length);
 }
+// Steam's public CCallbackBase ABI (see steam_friend_join.cpp): three virtual
+// methods, byte flags, then callback ID. No virtual destructor.
+class StatusCallbackBase {
+public:
+    virtual void Run(void *) = 0;
+    virtual void Run(void *, bool, std::uint64_t) = 0;
+    virtual int GetCallbackSizeBytes() = 0;
+    std::uint8_t flags{};
+    int callback{};
+protected:
+    ~StatusCallbackBase() = default;
+};
+// Support for Goldberg/GSE which uses the global callback instead of the connection option.
+class StatusCallback final : public StatusCallbackBase {
+public:
+    using Sink = void (*)(SteamNetConnectionStatusChangedCallback_t *);
+    Sink sink{};
+    std::atomic<unsigned> received{};
+    void Run(void *payload) override {
+        if (!payload || !sink)
+            return;
+        received.fetch_add(1, std::memory_order_relaxed);
+        sink(static_cast<SteamNetConnectionStatusChangedCallback_t *>(payload));
+    }
+    void Run(void *payload, bool failed, std::uint64_t) override {
+        if (!failed)
+            Run(payload);
+    }
+    int GetCallbackSizeBytes() override { return static_cast<int>(sizeof(SteamNetConnectionStatusChangedCallback_t)); }
+};
 } // namespace
 struct SteamTransport::Impl {
     void *sockets{};
@@ -204,6 +234,12 @@ struct SteamTransport::Impl {
     void (*run_callbacks)(void *){};
     bool (*socket_pair)(void *, HSteamNetConnection *, HSteamNetConnection *, bool,
                         const SteamNetworkingIdentity *, const SteamNetworkingIdentity *){};
+
+    // Never freed: Steam may still hold the pointer after this transport is gone.
+    // Its sink resolves through callback_owner, which is null once we are destroyed.
+    StatusCallback *status_callback = new StatusCallback;
+    bool game_server{};
+    void (*register_callback)(StatusCallbackBase *, int){};
 
     static void changed(SteamNetConnectionStatusChangedCallback_t *event) noexcept {
         auto *p = callback_owner.load(std::memory_order_acquire);
@@ -429,6 +465,16 @@ bool SteamTransport::bind(void *library, void *sockets, void *networking_utils) 
     Impl *expected = nullptr;
     if (!Impl::callback_owner.compare_exchange_strong(expected, &p) && expected != &p)
         throw std::runtime_error("Another ReSkate transport already owns callbacks.");
+    // Goldberg/GSE requires global callback registration.
+    try {
+        p.register_callback = symbol<decltype(p.register_callback)>(module, "SteamAPI_RegisterCallback");
+        p.status_callback->sink = &Impl::changed;
+        p.status_callback->flags = p.game_server ? 0x02 : 0x00; // k_ECallbackFlagsGameServer
+        p.status_callback->callback = SteamNetConnectionStatusChangedCallback_t::k_iCallback;
+        p.register_callback(p.status_callback, SteamNetConnectionStatusChangedCallback_t::k_iCallback);
+    } catch (...) {
+        // Without the export, only the option-based path (Valve's library) is available.
+    }
     p.state.ready = true;
     p.state.detail = "Steam ready. Relay authentication may still be connecting.";
     return true;
@@ -513,6 +559,7 @@ bool SteamTransport::open_game_server(void *library) {
             }
         }
         if (!sockets) throw std::runtime_error("Missing Steam export: SteamAPI_SteamGameServerNetworkingSockets_SteamAPI");
+        p.game_server = true;
         return bind(module, sockets, find(user, "SteamNetworkingUtils004"));
     } catch (const std::exception &e) {
         p.state.detail = e.what();
@@ -574,10 +621,6 @@ bool SteamTransport::join(std::uint64_t id, std::uint32_t direct_ip, std::uint16
     if (!open())
         return false;
     auto &p = *impl_;
-    if (id == p.state.local_id) {
-        p.state.detail = "Use Local Echo to test on one machine, or join from another Steam account.";
-        return false;
-    }
     p.host_id = id;
     p.allowed.insert(id);
     p.capacity = max_players;
@@ -646,7 +689,7 @@ bool SteamTransport::listen_direct(std::uint16_t port) {
 }
 bool SteamTransport::connect_peer(std::uint64_t id) {
     auto &p = *impl_;
-    if (!p.state.ready || p.state.hosting || !p.allowed.contains(id) || id == p.state.local_id)
+    if (!p.state.ready || p.state.hosting || !p.allowed.contains(id))
         return false;
     if (p.links.contains(id))
         return true;
@@ -723,7 +766,7 @@ void SteamTransport::poll() {
             }
         }
         // (A connection by address names a Steam ID only when Steam has vouched for it.)
-        if ((event.m_info.m_hListenSocket != p.listener && !direct) || !p.listener || !id || id == p.state.local_id ||
+        if ((event.m_info.m_hListenSocket != p.listener && !direct) || !p.listener || !id ||
             (!p.state.hosting && !p.allowed.contains(id)) || p.links.size() >= p.capacity - 1 ||
             existing != p.links.end() ||
             event.m_info.m_identityRemote.m_eType != k_ESteamNetworkingIdentityType_SteamID) {
