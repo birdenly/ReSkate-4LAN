@@ -171,8 +171,9 @@ bool ensure_seasonal_state(std::uintptr_t entity, bool wanted, std::uint64_t now
     }
     if (reached(wanted)) return true;
     // An engine-initiated auto-load is still in flight. Wait for it rather than
-    // claiming success from a non-null request handle or repeatedly reloading.
-    if (wanted && state.requested) { status = "Loading..."; return false; }
+    // claiming success from a non-null request handle, repeatedly reloading, or
+    // unloading it midway (the engine ignores that unload and finishes the load).
+    if (state.requested && !state.loaded) { status = "Loading..."; return false; }
     node.pending = wanted; node.requested_at = now;
     const auto slot = node.slot;
     SeasonalEvent event{local_runtime().base + addr::world_layers::subworld_event_vtable, wanted ? 0xd27bc17eu : 0x21f3f677u};
@@ -283,14 +284,18 @@ void update_world_layers(std::uintptr_t manager, std::uint64_t now) {
     // A disabled container takes precedence over enabled children. Otherwise
     // a later row could silently turn it back on or leave the plan oscillating.
     std::vector<bool> disabled(targets.size());
+    // A layer ReSkate keeps off (world_layers.h) is "off" whatever the player or a host chose.
+    const auto choice_of = [&](unsigned i) -> std::string_view {
+        return world_layer_kept_off(world_layers()[i].key) ? std::string_view("off") : std::string_view(r.model.choices[i]);
+    };
     for (unsigned i = 0; i < world_layers().size(); ++i)
-        if (world_layers()[i].map == map && r.model.choices[i] == "off") {
+        if (world_layers()[i].map == map && choice_of(i) == "off") {
             const auto slot = world_switch(i);
             desired[slot] = false; explicit_choice[slot] = disabled[slot] = true;
         }
     for (unsigned i = 0; i < world_layers().size(); ++i) {
         if (world_layers()[i].map != map) { r.model.status[i] = "Available in " + std::string(world_map_label(world_layers()[i].map)); continue; }
-        if (r.model.choices[i] != "on") continue;
+        if (choice_of(i) != "on") continue;
         bool blocked{};
         for (int at = static_cast<int>(world_leaf(i)); at >= 0; at = world_parent(at)) blocked = blocked || disabled[at];
         if (blocked) continue;
@@ -305,6 +310,10 @@ void update_world_layers(std::uintptr_t manager, std::uint64_t now) {
     std::vector<bool> done(targets.size()), inactive(targets.size());
     std::vector<std::string> status(targets.size(), "Waiting for layer");
     bool issued{};
+    const auto fully_off = [&](std::size_t at) {
+        SeasonalState live;
+        return !targets[at] || (seasonal_state(r.nodes.at(targets[at]), live) && !live.requested && !live.loaded);
+    };
     for (unsigned slot = 0; slot < targets.size(); ++slot) {
         if (world_layer_nodes()[slot].map != map) continue;
         const auto parent = world_parent(static_cast<int>(slot));
@@ -319,7 +328,12 @@ void update_world_layers(std::uintptr_t manager, std::uint64_t now) {
         if (!targets[slot]) continue;
         SeasonalState state;
         if (!seasonal_state(r.nodes.at(targets[slot]), state)) continue;
-        if (!desired[slot]) {
+        // Two times of day loaded at once can overflow the engine's light tables: the old one goes first.
+        const auto old = desired[slot] == true && !state.requested ? world_layer_old_time_of_day(slot, desired, fully_off) : targets.size();
+        if (old < targets.size()) {
+            status[slot] = "Waiting for the old time of day";
+            (void)ensure_seasonal_state(targets[old], false, now, issued, status[old]);
+        } else if (!desired[slot]) {
             done[slot] = state.requested == state.loaded;
             inactive[slot] = done[slot] && !state.loaded;
             status[slot] = done[slot] ? "Default" : "Loading...";
@@ -337,7 +351,7 @@ void update_world_layers(std::uintptr_t manager, std::uint64_t now) {
     }
     for (unsigned i = 0; i < world_layers().size(); ++i) {
         if (world_layers()[i].map != map) continue;
-        const auto& choice = r.model.choices[i];
+        const auto choice = choice_of(i);
         const auto slot = choice == "off" ? world_switch(i) : world_leaf(i);
         r.model.status[i] = done[slot] ? (choice == "default" ? "Default" : inactive[slot] ? "Disabled" : "Loaded") : status[slot];
     }

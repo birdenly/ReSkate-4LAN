@@ -12,9 +12,12 @@ using addr::local_music::music_ui_initialize_contract;
 
 using MusicUiInitialize = void (*)(std::uint64_t, std::uint64_t, std::uint64_t,
     std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t, const std::uint32_t*, const void*);
+using MusicFavoriteChange = std::int32_t (*)(std::uintptr_t, std::uint8_t, std::uint64_t, std::uint64_t);
 
 struct MusicUiFunctions {
     MusicUiInitialize initialize{};
+    MusicFavoriteChange favorite_change{};
+    std::int32_t (*favorite_apply)(std::uintptr_t, std::uint8_t, std::uint64_t, std::uint8_t){};
     void* (*construct_playlist)(void*, const std::uintptr_t*){};
     void* (*construct_song)(void*, const std::uintptr_t*){};
     void (*playlists)(std::uintptr_t, CosmeticShared*){};
@@ -42,8 +45,10 @@ struct MusicUiPending {
 struct MusicUiRuntime {
     MusicUiFunctions functions;
     std::unique_ptr<MusicUiPending> pending;
+    // Retains the weak owner and identity of the locally hydrated generation.
+    std::unique_ptr<MusicUiPending> initialized;
     std::uint64_t generation{};
-    bool updating{};
+    bool updating{}, restoring{};
 };
 
 MusicUiRuntime& music_ui_runtime();
@@ -57,6 +62,12 @@ bool music_ui_current(const MusicUiPending& pending);
 CosmeticShared music_ui_lease(const MusicUiPending& pending);
 
 bool music_ui_text(std::string_view value, std::size_t limit = 255);
+// The most songs the music screen is given, and the most places songs have in playlists: over
+// either, music_ui_catalog_valid turns the whole list down and the screen is empty. The rows of
+// the player's own playlists (Spotify, YouTube Music, their files) are held under them
+// (local_music_assets.cpp): a few large playlists went over the old thousand (2026-10-13).
+// (Two thousand songs: the screen's own table of songs is read only up to 2048, music_ui_context.)
+inline constexpr std::size_t music_ui_most_songs = 2000, music_ui_most_places = 16384;
 
 bool music_ui_catalog_valid(const MusicCatalog& catalog, const std::string& favorites);
 
@@ -76,11 +87,21 @@ struct MusicUiMessages {
 };
 
 bool music_ui_has_context(std::uintptr_t map, const std::string& id);
+std::int32_t music_favorite_change_hook(std::uintptr_t manager, std::uint8_t favorite,
+    std::uint64_t context, std::uint64_t song_parent);
 
 void music_ui_initialize_hook(std::uint64_t all, std::uint64_t hidden, std::uint64_t featured,
     std::uint64_t liked, std::uint64_t discovered, std::uint64_t favorites, std::uint64_t songs,
     const std::uint32_t* handle, const void* callback);
 
 void update_music_catalog();
+// The Spotify station (spotify_station.h): the cover of its song in the music screen is what
+// Spotify is playing while the station is on, and the song's own again when it is left.
+void update_spotify_cover();
+// The music screen's playlists and songs are given to it again as they are now (a playlist
+// the player has just added, in the setup page, is then there without the game being started
+// again). Any thread asks; it is done by the thread that fills the screen. (Being tried.)
+void request_music_catalog_refresh() noexcept;
+void update_music_catalog_refresh();
 
 }

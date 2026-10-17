@@ -17,6 +17,7 @@ struct MergeReport {
     std::size_t superbundles{};         // superbundle TOCs written
     std::size_t mergedBundles{};        // bundles combined from two or more mods
     std::size_t mergedAssets{};         // EBX assets two or more mods had both edited
+    std::size_t unchangedCopies{};      // mods' asset copies equal to the game's, not kept for combining
     std::size_t archives{};             // cas files linked in
     std::string issue;                  // non-empty when nothing was produced
     std::vector<std::string> notes;
@@ -62,6 +63,11 @@ struct MergeOptions {
     // only read at startup and stays as it is; the stamp goes, so the next
     // launch builds a clean patch.
     bool live{};
+    // Mods (folder names) already loaded in the running game, by the launch's merge or an
+    // earlier live one: they passed the store-copies check then, so a live merge holds only
+    // the others against it. Reading every mod's items and meshes again is most of what
+    // adding one map would otherwise wait on.
+    std::vector<std::string> checked;
 };
 
 // Combines every enabled mod into one patch under Mods/.reskate: superbundle

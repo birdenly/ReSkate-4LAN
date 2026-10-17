@@ -1,5 +1,6 @@
 #pragma once
 #include "world_layer_catalog.h"
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -11,6 +12,38 @@
 #include <vector>
 
 namespace dingosdk {
+
+// Layers ReSkate keeps switched off and does not offer: the seasons' content on San Vansterdam
+// (seasons 5 and 6) and the Isle of Grom (season 5). They keep their rows in the catalog, which
+// players and servers share by position, so nothing about a session's layer list changes; the
+// game just treats each as "off" whatever is saved or sent for it (local_world_layers.cpp),
+// and no menu or console command names it.
+inline constexpr std::array<std::string_view, 8> world_layers_kept_off{
+    "bam_dtn_season_05_content", "bam_dtn_season_05_inactive", "bam_dtn_season_05_permacontent",
+    "bam_dev_seasonal_content_season_06", "bam_dtn_season_06_content", "bam_dtn_season_06_inactive",
+    "bam_dtn_season_06_permacontent", "grom_season_05_content"};
+inline bool world_layer_kept_off(std::string_view key) noexcept {
+    for (const auto kept : world_layers_kept_off)
+        if (kept == key) return true;
+    return false;
+}
+// A layer's name as menus show it: its label without the developers' own marks, the words
+// DEV and DTN ("DTN Season 04 Content" is "Season 04 Content").
+inline std::string world_layer_title(std::string_view label) {
+    std::string title;
+    for (std::size_t at = 0; at < label.size();) {
+        const auto end = std::min(label.find(' ', at), label.size());
+        const auto word = label.substr(at, end - at);
+        at = end + 1;
+        const bool mark = word.size() == 3 && (word[0] == 'D' || word[0] == 'd') &&
+            (((word[1] == 'E' || word[1] == 'e') && (word[2] == 'V' || word[2] == 'v')) ||
+             ((word[1] == 'T' || word[1] == 't') && (word[2] == 'N' || word[2] == 'n')));
+        if (mark || word.empty()) continue;
+        if (!title.empty()) title += ' ';
+        title += word;
+    }
+    return title.empty() ? std::string(label) : title;
+}
 
 inline constexpr std::array<std::string_view, 3> world_layer_modes{"default", "on", "off"};
 // One choice per catalog row (world_layers()), in catalog order.
@@ -134,6 +167,29 @@ inline WorldLayerMapSelection select_world_layer_map(
     result.map = fallback_map;
     result.root = fallback;
     return result;
+}
+
+// A TOD_<n>_<name> layer (or a lighting tier's <tier>_TOD_<n>_<name>): one time of day among its siblings.
+inline bool world_layer_time_of_day(std::size_t slot) {
+    const auto& bundle = world_layer_nodes()[slot].bundle;
+    auto leaf = bundle.substr(bundle.find_last_of('/') + 1);
+    for (auto& c : leaf) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+    const auto mid = leaf.find("_tod_");
+    const auto at = leaf.starts_with("tod_") ? 4 : mid == std::string::npos ? leaf.size() : mid + 5;
+    return at < leaf.size() && leaf[at] >= '1' && leaf[at] <= '9';
+}
+
+// A sibling time of day that is to be off but not fully unloaded yet, which `slot` must wait for;
+// world_layer_nodes().size() when there is none.
+template <class FullyOff>
+std::size_t world_layer_old_time_of_day(std::size_t slot, const std::vector<std::optional<bool>>& desired, FullyOff&& fully_off) {
+    const auto& nodes = world_layer_nodes();
+    if (!world_layer_time_of_day(slot)) return nodes.size();
+    for (std::size_t at = 0; at < nodes.size(); ++at)
+        if (at != slot && nodes[at].parent == nodes[slot].parent && nodes[at].map == nodes[slot].map &&
+            desired[at] == false && world_layer_time_of_day(at) && !fully_off(at))
+            return at;
+    return nodes.size();
 }
 
 inline bool world_layer_supported(

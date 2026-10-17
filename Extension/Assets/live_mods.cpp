@@ -8,6 +8,7 @@
 #include "Engine/Core/Platform/path_text.h"
 #include "Engine/Game/Build/20260929/live_mods.h"
 #include "Engine/Game/Build/addresses.h"
+#include "Engine/Vfs/builtin_packs.h"
 #include "Engine/Vfs/mod_catalog.h"
 #include "Engine/Vfs/mod_scoring.h"
 #include "Extension/World/loading_screen.h"
@@ -37,6 +38,7 @@ std::atomic<bool> merging{};
 std::atomic<bool> reload_after{}, reload_ready{};
 std::mutex state_mutex;
 std::string last_status;
+Progress merge_progress; // under state_mutex, while merging
 std::optional<std::vector<std::filesystem::path>> pending_levels;
 std::optional<std::vector<std::string>> applied; // set by a live apply; the launch's list before one
 std::string current_level;
@@ -345,7 +347,11 @@ void apply_now() {
     mods::MergeReport report;
     std::string left_out;
     for (int round = 0;; ++round) {
-        report = mods::merge_mods(catalog, {}, {.live = true});
+        // The mods in the game now were checked against the store when they went in.
+        report = mods::merge_mods(catalog, [](const mods::MergeProgress &now) {
+            std::lock_guard lock(state_mutex);
+            merge_progress = {now.done, now.total, now.step};
+        }, {.live = true, .checked = before});
         if (!report.issue.empty()) break;
         bool removed = false;
         for (std::size_t i = catalog.mods.size(); i-- > 0;) {
@@ -431,11 +437,15 @@ void apply_now() {
         std::lock_guard lock(state_mutex);
         // Set with the manifests, so the client tick sees both in one update.
         if (needed) reload_ready = true;
+        mods::board_break_applied(catalog);
         pending_levels = mods::level_manifest_paths(catalog);
         applied.emplace();
         for (const auto &mod : catalog.mods) applied->push_back(mod.name);
     }
     if (!left_out.empty()) problem += (problem.empty() ? "left out " : "; left out ") + left_out + ", which could not be merged cleanly";
+    // Where the time went, step by step, as the launch's merge logs it.
+    for (const auto &note : report.notes)
+        if (note.starts_with("Merge times:")) logging::log(logging::Level::info, logging::Channel::assets, "Live mods: {}", note);
     const auto elapsed = static_cast<double>(GetTickCount64() - started) / 1000.0;
     set_status("applied " + std::to_string(catalog.mods.size()) + " mod(s) in " + std::to_string(elapsed).substr(0, 4) + "s; " +
                    (needed ? "reloading the level"
@@ -462,6 +472,10 @@ void run() {
 std::string apply(bool reload_level) {
     if (!layout_objects().manager) return "No merged mod patch was mounted at launch; restart the game to load mods.";
     if (merging.exchange(true)) return "Mods are already being applied.";
+    {
+        std::lock_guard lock(state_mutex);
+        merge_progress = {};
+    }
     reload_after = reload_level;
     std::thread(run).detach();
     return reload_level ? "Applying mods; the level reloads when they are ready, unless only maps changed."
@@ -492,8 +506,11 @@ ApplyEffect preview(const mods::ModList &list) {
     };
     bool reload{};
     for (const auto &name : before) {
-        if (named(now, name)) continue;
+        // One of a Board Break deck pack's decks stands for the pack (mod_catalog.h).
+        if (const auto pack = mods::board_break_pack_of(name); named(now, pack.empty() ? name : pack)) continue;
         const auto *entry = entry_of(name);
+        // Content ReSkate keeps itself (builtin_packs.h) is in no mod list, and stays.
+        if (!entry && (name.starts_with("reskate-builtin-") || mods::kept_by_reskate(list.root, name))) continue;
         // A folder deleted since: what it held is unknown, so assume the worst.
         if (!entry) {
             reload = true;
@@ -511,6 +528,11 @@ ApplyEffect preview(const mods::ModList &list) {
     return reload ? ApplyEffect::reload_level : ApplyEffect::maps_only;
 }
 bool busy() noexcept { return merging.load(); }
+Progress progress() {
+    std::lock_guard lock(state_mutex);
+    return merge_progress;
+}
+bool only_maps(const std::filesystem::path& directory) { return scan_maps_only(directory); }
 std::string status() {
     std::lock_guard lock(state_mutex);
     return last_status;
