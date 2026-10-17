@@ -288,12 +288,12 @@ update::Progress Launcher::progress_for(std::string label) {
     };
 }
 
-bool Launcher::launcher_outdated(const update::Config& config) const {
-    return !relaunched_ && !config.launcher.url.empty() && !update::file_matches(session_.self, config.launcher);
+bool Launcher::launcher_outdated(const update::Config& /*config*/) const {
+    return false;
 }
 
-bool Launcher::runtime_outdated(const update::Config& config) const {
-    return !config.runtime.url.empty() && !update::file_matches(session_.paths.dll, config.runtime);
+bool Launcher::runtime_outdated(const update::Config& /*config*/) const {
+    return false;
 }
 
 void Launcher::run_check() {
