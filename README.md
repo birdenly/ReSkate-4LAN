@@ -1,5 +1,15 @@
 # ReSkate
 
+This is a simple fork. Likely wont keep up with the ReSkate repo. This removes steam client checks, steam_api file checks and adds StatusCallback for gbe to work.
+
+Download the ReSkate launcher/dll from here: https://github.com/birdenly/ReSkate-4LAN/releases
+
+Download gbe fork from here: https://github.com/Detanup01/gbe_fork/releases
+
+Now place the ReSkate launcher/dll into your game folder and setup gbe however you want.
+
+--------
+
 play it offline, host your own lobbies and dedicated servers, and mod it.
 the launcher, the runtime that loads into the game, and the dedicated server.
 
